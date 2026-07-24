@@ -2,5 +2,6 @@
   "url": "https://clients.webnx.com/index.php?rp=/store/nyc-instant-ryzen",
   "label": "NYC Instant Ryzen",
   "webhook_url": "REPLACE_ME_WITH_YOUR_DISCORD_OR_SLACK_WEBHOOK_URL",
+  "discord_ping_user_id": "814557138902712321",
   "interval_minutes": 5
 }
