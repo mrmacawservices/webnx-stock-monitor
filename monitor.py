@@ -29,10 +29,26 @@ CONFIG_PATH = BASE_DIR / "config.json"
 SNAPSHOT_PATH = BASE_DIR / "snapshot.json"
 LOG_PATH = BASE_DIR / "monitor.log"
 
+SITE_ORIGIN = "https://clients.webnx.com"
+SITE_LOGO = f"{SITE_ORIGIN}/assets/img/logo.png"
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+
+# Discord brand colors, reused as embed side-stripe colors.
+COLOR_NEW = 0x57F287       # green
+COLOR_CHANGE = 0xFEE75C    # yellow
+COLOR_REMOVED = 0xED4245   # red
+COLOR_NEUTRAL = 0x5865F2   # blurple
+
+CHANGE_STYLE = {
+    "new": ("\U0001F195", "New listing"),
+    "stock": ("\U0001F4E6", "Stock change"),
+    "price": ("\U0001F4B0", "Price change"),
+    "removed": ("❌", "Removed / sold out"),
+}
 
 
 def load_config() -> dict:
@@ -107,63 +123,111 @@ def save_snapshot(products: dict) -> None:
 
 
 def diff_products(old: dict, new: dict) -> list:
-    """Return a list of human-readable change strings."""
+    """Return a list of {type, name, detail, url} change records."""
     changes = []
 
     for pid, new_p in new.items():
         if pid not in old:
-            changes.append(
-                f":new: **New listing:** {new_p['name']}\n"
-                f"    {new_p['qty_text'] or 'stock unknown'} — {new_p['price'] or 'price unknown'}\n"
-                f"    {new_p['order_url'] or ''}"
-            )
+            changes.append({
+                "type": "new",
+                "name": new_p["name"],
+                "detail": f"{new_p['qty_text'] or 'stock unknown'} — {new_p['price'] or 'price unknown'}",
+                "url": new_p.get("order_url"),
+            })
             continue
 
         old_p = old[pid]
         if old_p.get("qty") != new_p.get("qty"):
-            changes.append(
-                f":package: **Stock change:** {new_p['name']}\n"
-                f"    {old_p.get('qty_text')!r} -> {new_p.get('qty_text')!r}"
-            )
+            changes.append({
+                "type": "stock",
+                "name": new_p["name"],
+                "detail": f"{old_p.get('qty_text') or 'unknown'} → {new_p.get('qty_text') or 'unknown'}",
+                "url": new_p.get("order_url"),
+            })
         if old_p.get("price") != new_p.get("price"):
-            changes.append(
-                f":moneybag: **Price change:** {new_p['name']}\n"
-                f"    {old_p.get('price')} -> {new_p.get('price')}"
-            )
+            changes.append({
+                "type": "price",
+                "name": new_p["name"],
+                "detail": f"{old_p.get('price') or 'unknown'} → {new_p.get('price') or 'unknown'}",
+                "url": new_p.get("order_url"),
+            })
 
     for pid, old_p in old.items():
         if pid not in new:
-            changes.append(f":x: **Removed / sold out (delisted):** {old_p['name']}")
+            changes.append({
+                "type": "removed",
+                "name": old_p["name"],
+                "detail": "No longer listed",
+                "url": None,
+            })
 
     return changes
 
 
-def post_webhook(webhook_url: str, discord_content: str, slack_text: str = None) -> None:
+def absolute_url(url: str) -> str:
+    if not url:
+        return None
+    return url if url.startswith("http") else SITE_ORIGIN + url
+
+
+def post_webhook(webhook_url: str, embed: dict, content: str = "", slack_text: str = None) -> None:
     if slack_text is None:
-        slack_text = discord_content
+        slack_text = embed.get("description") or embed.get("title", "")
     if not webhook_url or "REPLACE_ME" in webhook_url:
         log("Webhook URL not configured — skipping notification: " + slack_text.replace("\n", " "))
         return
 
-    # Discord webhooks use "content"; Slack incoming webhooks use "text".
-    # Sending both keys is harmless — each platform ignores the key it doesn't use.
-    payload = {"content": discord_content, "text": slack_text}
+    # Discord renders "embeds"; Slack ignores it and falls back to "text".
+    payload = {"content": content, "embeds": [embed], "text": slack_text}
     resp = requests.post(webhook_url, json=payload, timeout=15)
     if resp.status_code >= 300:
         log(f"Webhook post failed ({resp.status_code}): {resp.text[:300]}")
 
 
 def send_webhook(webhook_url: str, category_label: str, changes: list, ping_user_id: str = None) -> None:
-    body = f"**WebNX stock update — {category_label}**\n\n" + "\n\n".join(changes)
-    discord_body = f"<@{ping_user_id}>\n{body}" if ping_user_id else body
-    post_webhook(webhook_url, discord_body, slack_text=body)
+    has_new = any(c["type"] == "new" for c in changes)
+    has_removed = any(c["type"] == "removed" for c in changes)
+    if has_new:
+        color = COLOR_NEW
+    elif has_removed and all(c["type"] == "removed" for c in changes):
+        color = COLOR_REMOVED
+    else:
+        color = COLOR_CHANGE
+
+    fields = []
+    for c in changes[:25]:
+        emoji, label = CHANGE_STYLE[c["type"]]
+        value = c["detail"]
+        url = absolute_url(c.get("url"))
+        if url:
+            value += f"\n[Order now]({url})"
+        fields.append({"name": f"{emoji} {label} — {c['name']}", "value": value, "inline": False})
+
+    embed = {
+        "title": f"WebNX Stock Update — {category_label}",
+        "color": color,
+        "fields": fields,
+        "thumbnail": {"url": SITE_LOGO},
+        "footer": {"text": "WebNX Stock Monitor"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    slack_text = f"WebNX Stock Update — {category_label}\n" + "\n".join(
+        f"[{CHANGE_STYLE[c['type']][1]}] {c['name']}: {c['detail']}" for c in changes
+    )
+    content = f"<@{ping_user_id}>" if ping_user_id else ""
+    post_webhook(webhook_url, embed, content=content, slack_text=slack_text)
 
 
 def send_scan_complete(webhook_url: str, category_label: str, product_count: int) -> None:
-    post_webhook(
-        webhook_url,
-        f"**Scan complete — {category_label}**\nNo stock identified ({product_count} listing(s) currently up).",
-    )
+    embed = {
+        "title": f"Scan complete — {category_label}",
+        "description": f"No stock identified. {product_count} listing(s) currently up.",
+        "color": COLOR_NEUTRAL,
+        "thumbnail": {"url": SITE_LOGO},
+        "footer": {"text": "WebNX Stock Monitor"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    post_webhook(webhook_url, embed)
 
 
 def run_once(config: dict) -> None:
@@ -182,7 +246,7 @@ def run_once(config: dict) -> None:
     if changes:
         log(f"{len(changes)} change(s) detected for {label}:")
         for c in changes:
-            log("  " + c.replace("\n", " "))
+            log(f"  [{c['type']}] {c['name']}: {c['detail']}")
         send_webhook(config.get("webhook_url", ""), label, changes, config.get("discord_ping_user_id"))
     else:
         log(f"No changes ({len(new_products)} product(s) currently listed).")
