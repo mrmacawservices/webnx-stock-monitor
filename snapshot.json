@@ -1,8 +1,8 @@
 {
   "728": {
     "name": "(IP-NY) AMD Ryzen 9950X, 192GB RAM, 2 x 1.92TB PCIE4 NVMe, 10G",
-    "qty_text": "2 Available",
-    "qty": 2,
+    "qty_text": "1 Available",
+    "qty": 1,
     "price": "$249.00 USD",
     "specs": "category=dedicated|manufacturer=AMD|family=Ryzen 9|provisioning=Instant|location=Manhattan, NY|processor=AMD Ryzen 9950X|cores=16|threads=32|freq=4.3 GHz|boost=5.7 GHz|tdp=170W|sockets=1|memory=192GB RAM|storage=2 x 1.92TB PCIE4 NVMe|network=10Gbps",
     "order_url": "/index.php?rp=/store/nyc-instant-ryzen/ip-ny-amd-ryzen-9950x-192gb-ram-2-x-192tb-pcie4-nvme-10g"
